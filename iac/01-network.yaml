@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Kanboard ECS HA - Network Layer
+  Creates security groups for all services.
+  Uses the default VPC and subnets (us-east-1a, us-east-1b).
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Default VPC ID
+
+Resources:
+
+  # --- ALB Security Group ---
+  SGAlbKanboard:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: GS-ALB-Kanboard
+      GroupDescription: Allow HTTP/HTTPS traffic to the Application Load Balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP from anywhere
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS from anywhere
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+          Description: PHPMyAdmin port
+        - IpProtocol: tcp
+          FromPort: 8443
+          ToPort: 8443
+          CidrIp: 0.0.0.0/0
+          Description: PHPMyAdmin HTTPS port
+      Tags:
+        - Key: Name
+          Value: GS-ALB-Kanboard
+
+  # --- ECS Tasks Security Group ---
+  SGKanboardService:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: GS-KANBOARD-SERVICE
+      GroupDescription: Allow HTTP traffic from ALB to Kanboard ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref SGAlbKanboard
+          Description: HTTP only from ALB
+      Tags:
+        - Key: Name
+          Value: GS-KANBOARD-SERVICE
+
+  # --- EFS Security Group ---
+  SGEfsKanboard:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: GS-EFS-KANBOARD
+      GroupDescription: Allow NFS access from Kanboard ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref SGKanboardService
+          Description: NFS from Kanboard tasks only
+      Tags:
+        - Key: Name
+          Value: GS-EFS-KANBOARD
+
+  # --- RDS Security Group ---
+  SGRdsKanboard:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: GS-RDS-KANBOARD
+      GroupDescription: Allow MySQL access from Kanboard ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref SGKanboardService
+          Description: MySQL from Kanboard tasks only
+      Tags:
+        - Key: Name
+          Value: GS-RDS-KANBOARD
+
+Outputs:
+  SGAlbKanboard:
+    Value: !Ref SGAlbKanboard
+    Export:
+      Name: !Sub "${AWS::StackName}-SGAlb"
+
+  SGKanboardService:
+    Value: !Ref SGKanboardService
+    Export:
+      Name: !Sub "${AWS::StackName}-SGService"
+
+  SGEfsKanboard:
+    Value: !Ref SGEfsKanboard
+    Export:
+      Name: !Sub "${AWS::StackName}-SGEfs"
+
+  SGRdsKanboard:
+    Value: !Ref SGRdsKanboard
+    Export:
+      Name: !Sub "${AWS::StackName}-SGRds"

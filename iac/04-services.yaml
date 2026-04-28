@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Kanboard ECS HA - Services, ALB, and Auto Scaling
+  Creates the ALB, ECS services for Kanboard and PHPMyAdmin, and auto scaling policies.
+
+Parameters:
+  NetworkStack:
+    Type: String
+    Default: kanboard-network
+
+  EcsStack:
+    Type: String
+    Default: kanboard-ecs
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  SubnetIdAZ1:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet us-east-1a
+
+  SubnetIdAZ2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet us-east-1b
+
+Resources:
+
+  # =====================
+  # Application Load Balancer
+  # =====================
+  KanboardALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: Kanboard-ALB
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref SubnetIdAZ1
+        - !Ref SubnetIdAZ2
+      SecurityGroups:
+        - Fn::ImportValue: !Sub "${NetworkStack}-SGAlb"
+
+  # --- Kanboard Target Group ---
+  KanboardTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: Kanboard-TG
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200,302"   # Kanboard redirects / to /login with 302
+
+  # --- PHPMyAdmin Target Group ---
+  PhpMyAdminTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: PHPMyAdmin-TG
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      HealthCheckPath: /
+      Matcher:
+        HttpCode: "200,302"
+
+  # --- Listener port 80 (Kanboard) ---
+  ListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref KanboardALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref KanboardTargetGroup
+
+  # --- Listener port 8080 (PHPMyAdmin) ---
+  ListenerPhpMyAdmin:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref KanboardALB
+      Port: 8080
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref PhpMyAdminTargetGroup
+
+  # =====================
+  # Kanboard ECS Service (HA)
+  # =====================
+  KanboardHAService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ListenerHTTP
+    Properties:
+      ServiceName: kanboard-ha-service
+      Cluster:
+        Fn::ImportValue: !Sub "${EcsStack}-ClusterArn"
+      TaskDefinition:
+        Fn::ImportValue: !Sub "${EcsStack}-KanboardTaskArn"
+      LaunchType: FARGATE
+      DesiredCount: 2
+      HealthCheckGracePeriodSeconds: 120
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: false
+      AvailabilityZoneRebalancing: ENABLED
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !Ref SubnetIdAZ1
+            - !Ref SubnetIdAZ2
+          SecurityGroups:
+            - Fn::ImportValue: !Sub "${NetworkStack}-SGService"
+          AssignPublicIp: ENABLED
+      LoadBalancers:
+        - ContainerName: kanboard
+          ContainerPort: 80
+          TargetGroupArn: !Ref KanboardTargetGroup
+
+  # =====================
+  # PHPMyAdmin ECS Service
+  # =====================
+  PhpMyAdminService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ListenerPhpMyAdmin
+    Properties:
+      ServiceName: phpmyadmin-service
+      Cluster:
+        Fn::ImportValue: !Sub "${EcsStack}-ClusterArn"
+      TaskDefinition:
+        Fn::ImportValue: !Sub "${EcsStack}-PhpMyAdminTaskArn"
+      LaunchType: FARGATE
+      DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 60
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !Ref SubnetIdAZ1
+            - !Ref SubnetIdAZ2
+          SecurityGroups:
+            - Fn::ImportValue: !Sub "${NetworkStack}-SGService"
+          AssignPublicIp: ENABLED
+      LoadBalancers:
+        - ContainerName: phpmyadmin
+          ContainerPort: 80
+          TargetGroupArn: !Ref PhpMyAdminTargetGroup
+
+  # =====================
+  # Auto Scaling
+  # =====================
+  KanboardScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 8
+      MinCapacity: 2
+      ResourceId: !Join
+        - /
+        - - service
+          - Fn::ImportValue: !Sub "${EcsStack}-ClusterName"
+          - !GetAtt KanboardHAService.Name
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  KanboardCPUScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: CpuTargetScaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref KanboardScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+Outputs:
+  ALBDNSName:
+    Value: !GetAtt KanboardALB.DNSName
+    Description: Access Kanboard at http://<this-value>
+    Export:
+      Name: !Sub "${AWS::StackName}-ALBDns"
+
+  KanboardURL:
+    Value: !Sub "http://${KanboardALB.DNSName}"
+
+  PhpMyAdminURL:
+    Value: !Sub "http://${KanboardALB.DNSName}:8080"

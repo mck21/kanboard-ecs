@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Kanboard ECS HA - Storage Layer
+  Creates EFS filesystem and RDS MySQL instance.
+
+Parameters:
+  NetworkStack:
+    Type: String
+    Default: kanboard-network
+    Description: Name of the network CloudFormation stack
+
+  SubnetIdAZ1:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet in us-east-1a for EFS mount target and RDS
+
+  SubnetIdAZ2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet in us-east-1b for EFS mount target
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: Master password for RDS admin user
+    MinLength: 8
+
+Resources:
+
+  # =====================
+  # EFS Filesystem
+  # =====================
+  KanboardEFS:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      FileSystemTags:
+        - Key: Name
+          Value: KanboardEFS
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      Encrypted: false  # Set to true in production
+
+  EFSMountTargetAZ1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref KanboardEFS
+      SubnetId: !Ref SubnetIdAZ1
+      SecurityGroups:
+        - Fn::ImportValue: !Sub "${NetworkStack}-SGEfs"
+
+  EFSMountTargetAZ2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref KanboardEFS
+      SubnetId: !Ref SubnetIdAZ2
+      SecurityGroups:
+        - Fn::ImportValue: !Sub "${NetworkStack}-SGEfs"
+
+  # =====================
+  # RDS MySQL
+  # =====================
+  KanboardDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for KanboardDB
+      SubnetIds:
+        - !Ref SubnetIdAZ1
+        - !Ref SubnetIdAZ2
+
+  KanboardDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: KanboardDB
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      EngineVersion: "8.0"
+      MasterUsername: admin
+      MasterUserPassword: !Ref DBPassword
+      DBName: kanboard
+      AllocatedStorage: "20"
+      StorageType: gp3
+      MultiAZ: false          # Set to true in production
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 0  # Disable backups (lab); set 7 in production
+      StorageEncrypted: false   # Set to true in production
+      MonitoringInterval: 0     # Disable enhanced monitoring (lab)
+      DBSubnetGroupName: !Ref KanboardDBSubnetGroup
+      VPCSecurityGroups:
+        - Fn::ImportValue: !Sub "${NetworkStack}-SGRds"
+      Tags:
+        - Key: Name
+          Value: KanboardDB
+    DeletionPolicy: Delete
+
+Outputs:
+  EFSFileSystemId:
+    Value: !Ref KanboardEFS
+    Export:
+      Name: !Sub "${AWS::StackName}-EFSId"
+
+  RDSEndpoint:
+    Value: !GetAtt KanboardDB.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-RDSEndpoint"

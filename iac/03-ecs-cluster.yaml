@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Kanboard ECS HA - ECS Cluster and Task Definitions
+  Creates the ECS cluster, task definitions for Kanboard and PHPMyAdmin.
+
+Parameters:
+  NetworkStack:
+    Type: String
+    Default: kanboard-network
+
+  StorageStack:
+    Type: String
+    Default: kanboard-storage
+
+  TaskRoleArn:
+    Type: String
+    Description: ARN of the IAM role for ECS tasks (LabRole)
+
+  DatabaseUrlSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret for DATABASE_URL (format: arn:...:kanboard/secrets-XXXX:DATABASE_URL::)
+
+  PmaHostSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret for PMA_HOST
+
+Resources:
+
+  # =====================
+  # ECS Cluster
+  # =====================
+  KanboardCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: KanboardCluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enhanced
+      Tags:
+        - Key: Name
+          Value: KanboardCluster
+
+  # =====================
+  # CloudWatch Log Group
+  # =====================
+  KanboardLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/kanboard
+      RetentionInDays: 7
+
+  PhpMyAdminLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/phpmyadmin
+      RetentionInDays: 7
+
+  # =====================
+  # Kanboard Task Definition
+  # =====================
+  KanboardTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: kanboard-task
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      TaskRoleArn: !Ref TaskRoleArn
+      ExecutionRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: kanboard
+          Image: kanboard/kanboard
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+              Name: kanboard-80-tcp
+              AppProtocol: http
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Ref DatabaseUrlSecretArn
+          MountPoints:
+            - SourceVolume: kanboard-data
+              ContainerPath: /var/www/app/data
+              ReadOnly: false
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/kanboard
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+      Volumes:
+        - Name: kanboard-data
+          EFSVolumeConfiguration:
+            FilesystemId:
+              Fn::ImportValue: !Sub "${StorageStack}-EFSId"
+            TransitEncryption: ENABLED
+
+  # =====================
+  # PHPMyAdmin Task Definition
+  # =====================
+  PhpMyAdminTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: phpmyadmin-task
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      TaskRoleArn: !Ref TaskRoleArn
+      ExecutionRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: phpmyadmin
+          Image: phpmyadmin
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          Secrets:
+            - Name: PMA_HOST
+              ValueFrom: !Ref PmaHostSecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/phpmyadmin
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+Outputs:
+  ClusterName:
+    Value: !Ref KanboardCluster
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterName"
+
+  ClusterArn:
+    Value: !GetAtt KanboardCluster.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterArn"
+
+  KanboardTaskDefinitionArn:
+    Value: !Ref KanboardTaskDefinition
+    Export:
+      Name: !Sub "${AWS::StackName}-KanboardTaskArn"
+
+  PhpMyAdminTaskDefinitionArn:
+    Value: !Ref PhpMyAdminTaskDefinition
+    Export:
+      Name: !Sub "${AWS::StackName}-PhpMyAdminTaskArn"
