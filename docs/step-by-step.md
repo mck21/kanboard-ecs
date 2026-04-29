@@ -127,8 +127,6 @@ SELECT host, user FROM mysql.user;
 QUIT;
 ```
 
-> If SQL commands fail with syntax errors, the PDF likely corrupted the quote characters. Type them manually.
-
 ---
 
 ## Step 5 — Add Persistence to the Task
