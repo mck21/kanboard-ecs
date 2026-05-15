@@ -2,7 +2,7 @@
 
 Estimated monthly costs for this architecture running in **us-east-1**, based on the configuration used in this project.
 
-> All prices in USD. Based on AWS public pricing as of early 2025. Use the [AWS Pricing Calculator](https://calculator.aws) for up-to-date estimates.
+> All prices in USD. Based on AWS public pricing as of early 2026. Use the [AWS Pricing Calculator](https://calculator.aws) for up-to-date estimates.
 
 ---
 
